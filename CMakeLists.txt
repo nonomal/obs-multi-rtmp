@@ -1,150 +1,69 @@
-cmake_minimum_required(VERSION 3.16)
-project(obs-multi-rtmp VERSION 0.2.8.0)
+cmake_minimum_required(VERSION 3.28...3.30)
 
-option(PORTABLE_MODE "if obs is used in portable mode" OFF)
-set(QTDIR "${QTDIR}" CACHE PATH "Path to qt directory")
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/common/bootstrap.cmake" NO_POLICY_SCOPE)
 
-list(APPEND CMAKE_PREFIX_PATH "${QTDIR}")
-set(CMAKE_INCLUDE_CURRENT_DIR ON)
+project(${_name} VERSION ${_version})
 
-set(CMAKE_CXX_STANDARD 17)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
+option(ENABLE_FRONTEND_API "Use obs-frontend-api for UI functionality" OFF)
+option(ENABLE_QT "Use Qt functionality" OFF)
 
-find_package(Qt5 COMPONENTS Widgets REQUIRED)
+include(compilerconfig)
+include(defaults)
+include(helpers)
 
-set(LIB_OBS libobs)
+add_library(${CMAKE_PROJECT_NAME} MODULE)
 
+list(APPEND CMAKE_PREFIX_PATH ${CMAKE_CURRENT_SOURCE_DIR}/.deps/obs-studio-31.0.0/build_x64/libobs)
+list(APPEND CMAKE_PREFIX_PATH ${CMAKE_CURRENT_SOURCE_DIR}/.deps/obs-studio-31.0.0/build_x64/deps/w32-pthreads)
+list(APPEND CMAKE_PREFIX_PATH ${CMAKE_CURRENT_SOURCE_DIR}/.deps/obs-studio-31.0.0/build_x64/UI/obs-frontend-api)
 
-# build obs lib
-if (WIN32)
-    # Windows
-    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+find_package(libobs REQUIRED)
+target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE OBS::libobs)
 
-    if (CMAKE_SIZEOF_VOID_P EQUAL 4)
-        set(PLAT "32bit")
-        set(LINK_PLAT "x86")
-    elseif (CMAKE_SIZEOF_VOID_P EQUAL 8)
-        set(PLAT "64bit")
-        set(LINK_PLAT "x64")
-    else ()
-        message(FATAL_ERROR "Unsupported Architecture!")
-    endif ()
+if(ENABLE_FRONTEND_API)
+  find_package(obs-frontend-api REQUIRED)
+  target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE OBS::obs-frontend-api)
+endif()
 
-    if (NOT DEFINED OBS_SRC_DIR)
-        set(OBS_SRC_DIR "${CMAKE_CURRENT_SOURCE_DIR}/obs-src")
-    endif ()
-    if (NOT DEFINED OBS_BIN_DIR)
-        set(OBS_BIN_DIR "${CMAKE_CURRENT_SOURCE_DIR}/obs-bin")
-    endif ()
+if(ENABLE_QT)
+  find_package(Qt6 COMPONENTS Widgets Core)
+  target_link_libraries(${CMAKE_PROJECT_NAME} PRIVATE Qt6::Core Qt6::Widgets)
+  target_compile_options(
+    ${CMAKE_PROJECT_NAME}
+    PRIVATE $<$<C_COMPILER_ID:Clang,AppleClang>:-Wno-quoted-include-in-framework-header -Wno-comma>
+  )
+  set_target_properties(
+    ${CMAKE_PROJECT_NAME}
+    PROPERTIES AUTOMOC ON AUTOUIC ON AUTORCC ON
+  )
+endif()
 
-    if (CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
-        if (${PORTABLE_MODE})
-            set(CMAKE_INSTALL_PREFIX "${CMAKE_CURRENT_SOURCE_DIR}/obs-bin" CACHE PATH "" FORCE)
-        else ()
-            set(CMAKE_INSTALL_PREFIX "$ENV{ProgramData}/obs-studio" CACHE PATH "" FORCE)
-        endif ()
-    endif ()
-
-    execute_process(COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/tools/pexports.exe"
-        "${OBS_BIN_DIR}/bin/${PLAT}/obs.dll"
-        OUTPUT_FILE "${CMAKE_CURRENT_BINARY_DIR}/libobs.def"
-        COMMAND_ECHO STDOUT
-    )
-    execute_process(COMMAND "${CMAKE_CURRENT_SOURCE_DIR}/tools/pexports.exe"
-        "${OBS_BIN_DIR}/bin/${PLAT}/obs-frontend-api.dll"
-        OUTPUT_FILE "${CMAKE_CURRENT_BINARY_DIR}/obs-frontend-api.def"
-        COMMAND_ECHO STDOUT
-    )
-    execute_process(COMMAND ${CMAKE_LINKER}
-        "/lib" "/MACHINE:${LINK_PLAT}"
-        "/def:${CMAKE_CURRENT_BINARY_DIR}/libobs.def"
-        "/out:${CMAKE_CURRENT_BINARY_DIR}/libobs.lib"
-    )
-    execute_process(COMMAND ${CMAKE_LINKER}
-        "/lib" "/MACHINE:${LINK_PLAT}"
-        "/def:${CMAKE_CURRENT_BINARY_DIR}/obs-frontend-api.def"
-        "/out:${CMAKE_CURRENT_BINARY_DIR}/obs-frontend-api.lib"
-    )
-elseif (APPLE)
-    # macOS
-    find_library(_LIB_OBS "${LIB_OBS}.0.dylib" PATHS ${OBS_BIN_DIR} REQUIRED)
-    set(LIB_OBS "${_LIB_OBS}")
-elseif (UNIX)
-    # Linux
-    find_package(LibObs REQUIRED)
-else ()
-    message(FATAL_ERROR "Unsupported OS!")
-endif ()
-
-
-# build plugin
-add_library(obs-multi-rtmp SHARED
-    "src/obs-multi-rtmp.cpp"
-    "src/obs-multi-rtmp.h"
-    "src/edit-widget.cpp"
-    "src/edit-widget.h"
-    "src/push-widget.cpp"
-    "src/push-widget.h"
-    "src/pch.h"
+target_sources(${CMAKE_PROJECT_NAME} PRIVATE
+  ./src/pch.h
+  ./src/obs-multi-rtmp.h
+  ./src/obs-multi-rtmp.cpp 
+  ./src/edit-widget.h
+  ./src/edit-widget.cpp
+  ./src/push-widget.h
+  ./src/push-widget.cpp
+  ./src/json-util.hpp
+  ./src/output-config.h
+  ./src/output-config.cpp
+  ./src/output-config-legacy.cpp
+  ./src/obs-properties-widget.h
+  ./src/obs-properties-widget.cpp
+  ./src/protocols.h
+  ./src/protocols.cpp
 )
-target_precompile_headers(obs-multi-rtmp PRIVATE
-    "src/pch.h"
+
+target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
+  ./dep/nlohmann-json
+  .deps/obs-studio-30.0.0/libobs
 )
-if (WIN32)
-    configure_file("src/version.rc.in" "${CMAKE_CURRENT_BINARY_DIR}/version.rc")
-    target_sources(obs-multi-rtmp PRIVATE
-        "${CMAKE_CURRENT_BINARY_DIR}/version.rc"
-    )
-endif ()
-target_include_directories(obs-multi-rtmp PRIVATE
-    "${OBS_SRC_DIR}/libobs"
-    "${OBS_SRC_DIR}/UI/obs-frontend-api"
-)
-target_link_directories(obs-multi-rtmp PRIVATE
-    "${CMAKE_CURRENT_BINARY_DIR}"
-    ${OBS_BIN_DIR}
-)
-target_link_libraries(obs-multi-rtmp PRIVATE
-    Qt5::Widgets
-    ${LIB_OBS}
-    obs-frontend-api
-)
+
+set_target_properties_plugin(${CMAKE_PROJECT_NAME} PROPERTIES OUTPUT_NAME ${_name})
 
 if (WIN32)
-    if (${PORTABLE_MODE})
-        install(TARGETS obs-multi-rtmp RUNTIME
-            DESTINATION "obs-plugins/${PLAT}"
-        )
-        install(DIRECTORY locale
-            DESTINATION "data/obs-plugins/obs-multi-rtmp"
-        )
-    else ()
-        install(TARGETS obs-multi-rtmp RUNTIME
-            DESTINATION "plugins/obs-multi-rtmp/bin/${PLAT}"
-        )
-        install(DIRECTORY locale
-            DESTINATION "plugins/obs-multi-rtmp/data"
-        )
-    endif ()
-elseif (APPLE)
-    set_target_properties(obs-multi-rtmp PROPERTIES
-        PREFIX ""
-        SUFFIX ".so"
-    )
-
-    install(TARGETS obs-multi-rtmp LIBRARY
-        DESTINATION "obs-studio/plugins/obs-multi-rtmp/bin"
-    )
-    install(DIRECTORY locale
-        DESTINATION "obs-studio/plugins/obs-multi-rtmp/data"
-    )
-elseif (UNIX)
-    set_target_properties(obs-multi-rtmp PROPERTIES PREFIX "")
-
-    install(TARGETS obs-multi-rtmp LIBRARY
-        DESTINATION "lib/obs-plugins"
-    )
-    install(DIRECTORY locale
-        DESTINATION "share/obs/obs-plugins/obs-multi-rtmp"
-    )
+  install(FILES archive-readme.txt DESTINATION . RENAME Readme.txt)
+  install(FILES archive-copybat.txt DESTINATION . RENAME Copy-Into-Here-To-Install.bat)
 endif ()
